@@ -19,7 +19,7 @@ const app = express();
 
 const allowedOrigins = [
   'http://localhost:5173', 
-  'https://painless-lms-portal.vercel.app'
+  'https://painless-lms-portal-cohort7.vercel.app'
 ];
 
 if (process.env.CLIENT_URL) {
