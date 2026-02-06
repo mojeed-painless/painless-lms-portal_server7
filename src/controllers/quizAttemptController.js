@@ -51,6 +51,15 @@ const submitBatchAttempt = asyncHandler(async (req, res) => {
   const attemptDate = isDaily ? (date ? date : new Date().toISOString().slice(0, 10)) : null;
   const attemptTopic = isDaily ? attemptDate : topic;
 
+  // If daily quiz, ensure the student hasn't already submitted for this date
+  if (isDaily) {
+    const existing = await DailyQuizAttempt.findOne({ student: req.user._id, date: attemptDate }).exec();
+    if (existing) {
+      res.status(409);
+      return res.json({ message: 'Daily attempt already exists', attempt: existing });
+    }
+  }
+
   // Upsert each answer (student, topic, questionId)
   const ops = answers.map(a => {
     const filter = { student: req.user._id, topic: attemptTopic, questionId: String(a.questionId) };
@@ -72,17 +81,14 @@ const submitBatchAttempt = asyncHandler(async (req, res) => {
   const score = savedAnswers.reduce((acc, a) => acc + (a.isCorrect ? 1 : 0), 0);
 
   if (isDaily) {
-    // Upsert a DailyQuizAttempt so each student has at most one attempt per date
-    const filter = { student: req.user._id, date: attemptDate };
-    const update = {
+    // Create a DailyQuizAttempt record (single attempt per student+date enforced above)
+    const dailyAttempt = await DailyQuizAttempt.create({
+      student: req.user._id,
+      date: attemptDate,
       score,
       total,
       timeTaken: typeof timeTaken === 'number' ? timeTaken : 0,
-      attemptedAt: Date.now(),
-    };
-    const options = { new: true, upsert: true, setDefaultsOnInsert: true };
-
-    const dailyAttempt = await DailyQuizAttempt.findOneAndUpdate(filter, update, options).exec();
+    });
     return res.status(201).json({ attempt: dailyAttempt, savedAnswers });
   }
 
@@ -129,3 +135,19 @@ const getDailyLeaderboard = asyncHandler(async (req, res) => {
 });
 
 export { getDailyLeaderboard };
+
+// @desc Get current user's daily attempt (by date)
+// @route GET /api/quiz-attempts/daily
+// @access Private
+const getMyDailyAttempt = asyncHandler(async (req, res) => {
+  const { date } = req.query;
+  const targetDate = date || new Date().toISOString().slice(0, 10);
+  const attempt = await DailyQuizAttempt.findOne({ student: req.user._id, date: targetDate });
+  if (!attempt) {
+    res.status(404).json({ message: 'No attempt for this date' });
+    return;
+  }
+  res.json(attempt);
+});
+
+export { getMyDailyAttempt };
