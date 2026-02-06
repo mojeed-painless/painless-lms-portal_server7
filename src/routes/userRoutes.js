@@ -8,6 +8,7 @@ import {
     getAllUsers,
     getProgress,
     updateProgress,
+    getAggregatedStudentGrades,
 } from '../controllers/userController.js';
 import { protect, admin } from '../middleware/authMiddleware.js';
 
@@ -19,6 +20,10 @@ router.post('/register', registerUser);
 
 router.use(protect);
 
+// Aggregated grades available to any authenticated user (students + admins)
+router.route('/grades')
+    .get(getAggregatedStudentGrades);
+
 router.route('/progress')
     .get(getProgress)
     .put(updateProgress);
@@ -28,6 +33,9 @@ adminRouter.route('/pending')
 
 adminRouter.route('/all')
     .get(getAllUsers); 
+
+adminRouter.route('/grades')
+    .get(getAggregatedStudentGrades);
 
 adminRouter.route('/:id')
     .put(updateUserStatus)

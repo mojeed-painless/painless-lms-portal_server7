@@ -1,6 +1,9 @@
 import asyncHandler from 'express-async-handler';
 import generateToken from '../utils/generateToken.js';
 import User from '../models/User.js';
+import StudentAssignment from '../models/StudentAssignment.js';
+import Assignment from '../models/Assignment.js';
+import QuizAttempt from '../models/QuizAttempt.js';
 
 // @desc    Auth user & get token (Login)
 // @route   POST /api/users/login
@@ -293,3 +296,84 @@ export {
     getProgress,
     updateProgress
 };
+
+// @desc    Get aggregated student grades (assignment avg, quiz avg, overall)
+// @route   GET /api/users/admin/grades
+// @access  Private/Admin
+const getAggregatedStudentGrades = asyncHandler(async (req, res) => {
+  // Aggregate assignment percentages per student
+  const assignmentAgg = await StudentAssignment.aggregate([
+    { $match: { status: 'graded', score: { $ne: null } } },
+    {
+      $lookup: {
+        from: 'assignments',
+        localField: 'assignmentId',
+        foreignField: '_id',
+        as: 'assignment',
+      },
+    },
+    { $unwind: '$assignment' },
+    {
+      $project: {
+        studentId: 1,
+        percent: { $multiply: [{ $divide: ['$score', '$assignment.maxScore'] }, 100] },
+      },
+    },
+    { $group: { _id: '$studentId', assignmentAverage: { $avg: '$percent' }, assignmentCount: { $sum: 1 } } },
+  ]);
+
+  // Aggregate latest quiz attempt per topic, then average per student
+  const quizAgg = await QuizAttempt.aggregate([
+    { $sort: { student: 1, topic: 1, attemptedAt: -1 } },
+    { $group: { _id: { student: '$student', topic: '$topic' }, score: { $first: '$score' }, total: { $first: '$total' } } },
+    { $project: { student: '$_id.student', percent: { $multiply: [{ $divide: ['$score', '$total'] }, 100] } } },
+    { $group: { _id: '$student', quizAverage: { $avg: '$percent' }, quizCount: { $sum: 1 } } },
+  ]);
+
+  // Normalize into maps for fast lookup
+  const assignmentMap = {};
+  assignmentAgg.forEach(a => {
+    assignmentMap[a._id.toString()] = { avg: a.assignmentAverage, count: a.assignmentCount };
+  });
+
+  const quizMap = {};
+  quizAgg.forEach(q => {
+    quizMap[q._id.toString()] = { avg: q.quizAverage, count: q.quizCount };
+  });
+
+  // Fetch only approved students
+  const students = await User.find({ role: 'student', isApproved: true }).select('-password').lean();
+
+  const results = students.map(u => {
+    const id = u._id.toString();
+    const a = assignmentMap[id] || { avg: 0, count: 0 };
+    const q = quizMap[id] || { avg: 0, count: 0 };
+
+    const assignmentAverage = a.count ? Number(a.avg.toFixed(2)) : 0;
+    const quizAverage = q.count ? Number(q.avg.toFixed(2)) : 0;
+    let overall = 0;
+    if (a.count > 0 && q.count > 0) overall = Number(((assignmentAverage + quizAverage) / 2).toFixed(2));
+    else if (a.count > 0) overall = assignmentAverage;
+    else if (q.count > 0) overall = quizAverage;
+
+    return {
+      _id: u._id,
+      firstName: u.firstName,
+      lastName: u.lastName,
+      username: u.username,
+      email: u.email,
+      assignmentAverage,
+      assignmentCount: a.count,
+      quizAverage,
+      quizCount: q.count,
+      overall,
+    };
+  });
+
+  // Sort descending by overall
+  results.sort((x, y) => y.overall - x.overall);
+
+  res.json(results);
+});
+
+export { getAggregatedStudentGrades };
