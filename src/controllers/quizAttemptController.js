@@ -1,5 +1,8 @@
 import asyncHandler from 'express-async-handler';
 import QuizAttempt from '../models/QuizAttempt.js';
+import StudentAnswer from '../models/StudentAnswer.js';
+import DailyQuizAttempt from '../models/DailyQuizAttempt.js';
+import User from '../models/User.js';
 
 // @desc  Create a quiz attempt record
 // @route POST /api/quiz-attempts
@@ -30,4 +33,99 @@ const getMyAttempts = asyncHandler(async (req, res) => {
   res.json(attempts);
 });
 
-export { createAttempt, getMyAttempts };
+
+// @desc  Submit a batch of answers and create a quiz attempt (daily quiz finish)
+// @route POST /api/quiz-attempts/submit
+// @access Private
+const submitBatchAttempt = asyncHandler(async (req, res) => {
+  const { topic, answers, timeTaken, date } = req.body;
+
+  if (!Array.isArray(answers) || answers.length === 0) {
+    res.status(400);
+    throw new Error('Answers array is required');
+  }
+
+  // Determine whether this is a daily quiz. For daily quizzes we use a date string
+  // (YYYY-MM-DD) as the topic so answers/attempts are uniquely keyed by date.
+  const isDaily = !topic || topic === 'daily';
+  const attemptDate = isDaily ? (date ? date : new Date().toISOString().slice(0, 10)) : null;
+  const attemptTopic = isDaily ? attemptDate : topic;
+
+  // Upsert each answer (student, topic, questionId)
+  const ops = answers.map(a => {
+    const filter = { student: req.user._id, topic: attemptTopic, questionId: String(a.questionId) };
+    const update = {
+      questionText: a.questionText || '',
+      selectedOption: a.selectedOption,
+      correctAnswer: a.correctAnswer || null,
+      isCorrect: typeof a.correctAnswer !== 'undefined' ? (a.selectedOption === a.correctAnswer) : false,
+      submittedAt: Date.now(),
+    };
+    const options = { new: true, upsert: true, setDefaultsOnInsert: true };
+    return StudentAnswer.findOneAndUpdate(filter, update, options).exec();
+  });
+
+  const savedAnswers = await Promise.all(ops);
+
+  // Calculate score based on savedAnswers
+  const total = savedAnswers.length;
+  const score = savedAnswers.reduce((acc, a) => acc + (a.isCorrect ? 1 : 0), 0);
+
+  if (isDaily) {
+    // Upsert a DailyQuizAttempt so each student has at most one attempt per date
+    const filter = { student: req.user._id, date: attemptDate };
+    const update = {
+      score,
+      total,
+      timeTaken: typeof timeTaken === 'number' ? timeTaken : 0,
+      attemptedAt: Date.now(),
+    };
+    const options = { new: true, upsert: true, setDefaultsOnInsert: true };
+
+    const dailyAttempt = await DailyQuizAttempt.findOneAndUpdate(filter, update, options).exec();
+    return res.status(201).json({ attempt: dailyAttempt, savedAnswers });
+  }
+
+  const attempt = await QuizAttempt.create({
+    student: req.user._id,
+    topic: attemptTopic,
+    score,
+    total,
+    timeTaken: typeof timeTaken === 'number' ? timeTaken : 0,
+  });
+
+  res.status(201).json({ attempt, savedAnswers });
+});
+
+export { createAttempt, getMyAttempts, submitBatchAttempt };
+
+// @desc  Get top N daily leaderboard for a given date
+// @route GET /api/quiz-attempts/leaderboard/daily
+// @access Public
+const getDailyLeaderboard = asyncHandler(async (req, res) => {
+  const { date } = req.query;
+  const targetDate = date || new Date().toISOString().slice(0, 10);
+
+  // Sort: higher score first, then lower timeTaken
+  const top = await DailyQuizAttempt.find({ date: targetDate })
+    .sort({ score: -1, timeTaken: 1, attemptedAt: 1 })
+    .limit(3)
+    .populate('student', 'firstName lastName username')
+    .lean();
+
+  // Map to simple shape
+  const result = top.map((t, idx) => ({
+    rank: idx + 1,
+    studentId: t.student?._id || null,
+    name: t.student ? `${t.student.firstName} ${t.student.lastName}` : 'Unknown',
+    username: t.student?.username || '',
+    score: t.score,
+    total: t.total,
+    timeTaken: t.timeTaken,
+    attemptedAt: t.attemptedAt,
+  }));
+
+  res.json({ date: targetDate, top: result });
+});
+
+export { getDailyLeaderboard };
