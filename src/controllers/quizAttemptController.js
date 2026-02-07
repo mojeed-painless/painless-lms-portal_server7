@@ -90,7 +90,29 @@ const submitBatchAttempt = asyncHandler(async (req, res) => {
       total,
       timeTaken: typeof timeTaken === 'number' ? timeTaken : 0,
     });
-    return res.status(201).json({ attempt: dailyAttempt, savedAnswers });
+
+    // Recalculate points for all attempts on this date based on new rankings
+    const allAttemptsForDate = await DailyQuizAttempt.find({ date: attemptDate })
+      .sort({ score: -1, timeTaken: 1, attemptedAt: 1 });
+
+    // Update points for each attempt based on new rank
+    const updateOps = allAttemptsForDate.map(async (attempt, index) => {
+      const rank = index + 1;
+      let rankBonus = 0;
+      if (rank === 1) rankBonus = 5;
+      else if (rank === 2) rankBonus = 3;
+      else if (rank === 3) rankBonus = 1;
+
+      const points = rankBonus + attempt.score;
+      attempt.points = points;
+      return attempt.save();
+    });
+
+    await Promise.all(updateOps);
+
+    // Fetch the updated daily attempt to return the latest points
+    const updatedAttempt = await DailyQuizAttempt.findById(dailyAttempt._id);
+    return res.status(201).json({ attempt: updatedAttempt, savedAnswers });
   }
 
   const attempt = await QuizAttempt.create({
@@ -129,6 +151,7 @@ const getDailyLeaderboard = asyncHandler(async (req, res) => {
     score: t.score,
     total: t.total,
     timeTaken: t.timeTaken,
+    points: t.points || 0,
     attemptedAt: t.attemptedAt,
   }));
 
@@ -136,6 +159,44 @@ const getDailyLeaderboard = asyncHandler(async (req, res) => {
 });
 
 export { getDailyLeaderboard };
+
+// @desc Get aggregated daily quiz leaderboard (total points across all dates)
+// @route GET /api/quiz-attempts/leaderboard/daily/aggregate
+// @access Public
+const getDailyLeaderboardAggregate = asyncHandler(async (req, res) => {
+  // Aggregate all DailyQuizAttempt records by student, summing their points
+  const aggregated = await DailyQuizAttempt.aggregate([
+    {
+      $group: {
+        _id: '$student',
+        totalPoints: { $sum: '$points' },
+        totalAttempts: { $sum: 1 },
+      },
+    },
+    {
+      $sort: { totalPoints: -1 },
+    },
+  ]);
+
+  // Now fetch user info for each student
+  const result = await Promise.all(
+    aggregated.map(async (item, idx) => {
+      const student = await User.findById(item._id).lean();
+      return {
+        rank: idx + 1,
+        studentId: item._id || null,
+        name: student ? `${student.firstName} ${student.lastName}`.trim() : 'Unknown',
+        username: student?.username || '',
+        totalPoints: item.totalPoints || 0,
+        totalAttempts: item.totalAttempts || 0,
+      };
+    })
+  );
+
+  res.json(result);
+});
+
+export { getDailyLeaderboardAggregate };
 
 // @desc Get session info (start/end) for a given date
 // @route GET /api/quiz-attempts/session

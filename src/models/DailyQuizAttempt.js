@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+                                                                                                                         import mongoose from 'mongoose';
 
 const dailyQuizAttemptSchema = mongoose.Schema(
   {
@@ -15,6 +15,12 @@ const dailyQuizAttemptSchema = mongoose.Schema(
     score: { type: Number, required: true },
     total: { type: Number, required: true },
     timeTaken: { type: Number, required: true }, // seconds
+    points: { 
+      type: Number, 
+      default: 0,
+      // Calculated as: rankBonus + score 
+      // rankBonus: 1st=5, 2nd=3, 3rd=1, others=0
+    },
     attemptedAt: { type: Date, default: Date.now },
   },
   { timestamps: true }
