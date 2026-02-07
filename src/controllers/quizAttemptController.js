@@ -2,6 +2,7 @@ import asyncHandler from 'express-async-handler';
 import QuizAttempt from '../models/QuizAttempt.js';
 import StudentAnswer from '../models/StudentAnswer.js';
 import DailyQuizAttempt from '../models/DailyQuizAttempt.js';
+import DailyQuizSession from '../models/DailyQuizSession.js';
 import User from '../models/User.js';
 
 // @desc  Create a quiz attempt record
@@ -135,6 +136,43 @@ const getDailyLeaderboard = asyncHandler(async (req, res) => {
 });
 
 export { getDailyLeaderboard };
+
+// @desc Get session info (start/end) for a given date
+// @route GET /api/quiz-attempts/session
+// @access Public
+const getDailySession = asyncHandler(async (req, res) => {
+  const { date } = req.query;
+  const targetDate = date || new Date().toISOString().slice(0, 10);
+  const session = await DailyQuizSession.findOne({ date: targetDate }).lean();
+  const now = new Date();
+
+  if (!session) {
+    return res.json({ date: targetDate, now: now.toISOString(), isLive: false });
+  }
+
+  const isLive = now >= new Date(session.startAt) && now < new Date(session.endAt);
+  res.json({ date: targetDate, startAt: session.startAt, endAt: session.endAt, now: now.toISOString(), isLive });
+});
+
+// @desc Create or update session for a date (admin)
+// @route POST /api/quiz-attempts/session
+// @access Admin
+const upsertDailySession = asyncHandler(async (req, res) => {
+  const { date, startAt, endAt } = req.body;
+  if (!date || !startAt || !endAt) {
+    res.status(400);
+    throw new Error('date, startAt and endAt are required');
+  }
+
+  const filter = { date };
+  const update = { startAt: new Date(startAt), endAt: new Date(endAt) };
+  const options = { new: true, upsert: true, setDefaultsOnInsert: true };
+
+  const session = await DailyQuizSession.findOneAndUpdate(filter, update, options).exec();
+  res.json(session);
+});
+
+export { getDailySession, upsertDailySession };
 
 // @desc Get current user's daily attempt (by date)
 // @route GET /api/quiz-attempts/daily
