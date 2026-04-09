@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import cors from 'cors';
 import userRoutes from './src/routes/userRoutes.js';
 import assignmentRoutes from './src/routes/assignmentRoutes.js';
+import configRoutes from './src/routes/configRoutes.js';
 import quizAnswerRoutes from './src/routes/quizAnswerRoutes.js';
 import quizAttemptRoutes from './src/routes/quizAttemptRoutes.js';
 import { notFound, errorHandler } from './src/middleware/errorMiddleware.js';
@@ -52,6 +53,7 @@ app.get('/', (req, res) => {
 });
 
 app.use('/api/users', userRoutes);
+app.use('/api/config', configRoutes);
 app.use('/api/assignments', assignmentRoutes);
 app.use('/api/quiz-answers', quizAnswerRoutes);
 app.use('/api/quiz-attempts', quizAttemptRoutes);
